@@ -1,0 +1,177 @@
+import requests
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+import json
+import os
+
+# وضع التوكن الخاص بالبوت وAPI Key لموقع shrtfly
+TELEGRAM_TOKEN = '6594222678:AAFfBZsQ5gR1LJ-JgE1L3ogCf0YiAxw8hUw'
+SHORTENER_API_KEY = 'b3366121f53c71fd1ecbd12fa72a2511'
+SHORTENER_API_URL = 'https://shrtfly.com/api'
+
+# ملف لتخزين بيانات المستخدمين
+USERS_DATA_FILE = 'users_data.json'
+
+# دالة لقراءة البيانات من ملف
+def load_user_data():
+    if os.path.exists(USERS_DATA_FILE):
+        with open(USERS_DATA_FILE, 'r') as f:
+            return json.load(f)
+    return {}
+
+# دالة لحفظ البيانات إلى ملف
+def save_user_data(data):
+    with open(USERS_DATA_FILE, 'w') as f:
+        json.dump(data, f)
+
+# دالة لاختصار الرابط باستخدام shrtfly
+def shorten_link(long_url):
+    params = {
+        'api': SHORTENER_API_KEY,
+        'url': long_url
+    }
+    try:
+        response = requests.get(SHORTENER_API_URL, params=params)
+        if response.status_code == 200:
+            result = response.json()
+            if result.get('status') == 'success':
+                shortened_url = result['result'].get('shorten_url')
+                return shortened_url
+        return None
+    except Exception as e:
+        print(f"حدث خطأ أثناء الاتصال بـ shrtfly: {e}")
+        return None
+
+# دالة لمعالجة الأمر /start
+def start(update, context):
+    keyboard = [
+        [InlineKeyboardButton("رابط الإحالة", callback_data="get_referral_link")],
+        [InlineKeyboardButton("إحصائائياتي", callback_data="stats")],
+        [InlineKeyboardButton("سحب الأرباح", callback_data="withdraw")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    message = (
+        "مرحبًا بك في بوت اختصار الروابط!\n\n"
+        "هذا البوت يسمح لك باختصار الروابط ومشاركتها. عندما يقوم الأشخاص باستخدام رابطك المختصر، "
+        "ستحصل على مكافآت مقابل كل إحالة.\n\n"
+        "💰 **كيفية الربح**: يمكنك ربح المال من خلال اختصار الروابط. "
+        "كلما زاد عدد الأشخاص الذين قاموا باستخدام رابطك، كلما زادت أرباحك.\n\n"
+        "🔗 **رابط الإحالة**: استخدم رابط الإحالة الخاص بك لزيادة عدد الإحالات وجني الأرباح.\n\n"
+        "لرؤية إحصائياتك وبدأ الربح، اضغط على الأزرار أدناه."
+    )
+    
+    update.message.reply_text(message, reply_markup=reply_markup)
+
+# دالة لمعالجة الإحصائيات
+def stats(update, context):
+    query = update.callback_query
+    user_id = str(query.from_user.id)
+    
+    user_data = load_user_data()
+    if user_id in user_data:
+        ref_count = user_data[user_id].get('referrals', 0)
+        earnings = ref_count * 0.1  # افترض أن كل إحالة تعطي 0.1 دولار
+        impressions = user_data[user_id].get('impressions', 0)
+        earnings_from_impressions = impressions * 0.003  # 0.003 دولار لكل ظهور
+        total_earnings = earnings + earnings_from_impressions
+        query.edit_message_text(f"عدد الإحالات: {ref_count}\nعدد الظهور: {impressions}\nالأرباح من الإحالات: {earnings} دولار\nالأرباح من الظهور: {earnings_from_impressions} دولار\nالمجموع: {total_earnings} دولار\n\nللاستمرار، يمكنك العودة إلى القائمة الرئيسية عبر /rotor")
+    else:
+        query.edit_message_text("لم تقم بأي إحالة بعد.\n\nللاستمرار، يمكنك العودة إلى القائمة الرئيسية عبر /rotor")
+
+# دالة للرد على الرسائل وإضافة الإحالات
+def handle_message(update, context):
+    user_message = update.message.text
+    user_id = str(update.message.from_user.id)
+    user_data = load_user_data()
+    
+    # التأكد من أن الرسالة هي رابط صالح
+    if user_message.startswith("http://") or user_message.startswith("https://"):
+        shortened_link = shorten_link(user_message)
+        
+        if shortened_link:
+            update.message.reply_text(f"هذا هو الرابط المختصر: {shortened_link}")
+            
+            # إضافة الإحالة للمستخدم
+            if user_id not in user_data:
+                user_data[user_id] = {'referrals': 0, 'earnings': 0, 'impressions': 0}
+            
+            # ارسال رابط الإحالة
+            referral_link = f"{shortened_link}?ref={user_id}"
+            update.message.reply_text(f"استخدم هذا الرابط للإحالة: {referral_link}")
+            
+            # زيادة عدد الظهور (افترض 1000 ظهور لكل رابط مختصر يتم تقصيره)
+            user_data[user_id]['impressions'] += 1000  # كل رابط مختصر يعادل 1000 ظهور افتراضيًا
+            
+            save_user_data(user_data)
+        else:
+            update.message.reply_text("عذرًا، حدث خطأ أثناء اختصار الرابط.")
+    else:
+        update.message.reply_text("الرجاء إرسال رابط صالح للقيام باختصاره.")
+
+# دالة للرد على الإحصائيات عبر الزر
+def button(update, context):
+    query = update.callback_query
+    query.answer()
+
+    if query.data == "get_referral_link":
+        query.edit_message_text(text="الرجاء إرسال الرابط الذي تريد اختصاره.")
+    elif query.data == "stats":
+        stats(update, context)
+    elif query.data == "withdraw":
+        withdraw(update, context)
+
+# دالة للسحب
+def withdraw(update, context):
+    user_data = load_user_data()
+    user_id = str(update.callback_query.from_user.id)
+    
+    if user_id in user_data:
+        earnings = user_data[user_id].get('earnings', 0)
+        if earnings >= 1:  # تحديد الحد الأدنى للسحب (مثلاً 1 دولار)
+            # إرسال طلب سحب (هنا يمكن أن تتم إضافة وظائف مثل الدفع أو التحويلات)
+            user_data[user_id]['earnings'] = 0  # إعادة تعيين الأرباح بعد السحب
+            save_user_data(user_data)
+            update.callback_query.edit_message_text(f"تم سحب {earnings} دولار بنجاح.\n\nللاستمرار، يمكنك العودة إلى القائمة الرئيسية عبر /rotor")
+        else:
+            update.callback_query.edit_message_text(
+                "عذرًا، الحد الأدنى للسحب هو 1 دولار. "
+                "يرجى جمع المزيد من الأرباح قبل السحب.\n\nللاستمرار، يمكنك العودة إلى القائمة الرئيسية عبر /rotor"
+            )
+    else:
+        update.callback_query.edit_message_text("ليس لديك أرباح بعد للسحب.\n\nللاستمرار، يمكنك العودة إلى القائمة الرئيسية عبر /rotor")
+
+# دالة لرجوع إلى القائمة الرئيسية عبر /rotor
+def rotor(update, context):
+    start(update, context)
+
+# إعداد البوت
+def main():
+    updater = Updater(TELEGRAM_TOKEN, use_context=True)
+    dp = updater.dispatcher
+
+    # إضافة معالج للأمر /start
+    dp.add_handler(CommandHandler("start", start))
+    
+    # إضافة معالج للأمر /rotor للرجوع إلى القائمة الرئيسية
+    dp.add_handler(CommandHandler("rotor", rotor))
+
+    # إضافة معالج للأمر /stats لعرض الإحصائيات
+    dp.add_handler(CommandHandler("stats", stats))
+
+    # إضافة معالج للسحب
+    dp.add_handler(CommandHandler("withdraw", withdraw))
+
+    # التعامل مع الرسائل
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
+
+    # التعامل مع الإحصائيات عبر الأزرار
+    dp.add_handler(CallbackQueryHandler(button))
+
+    # بدء تشغيل البوت
+    print("البوت قيد التشغيل...")
+    updater.start_polling()
+    updater.idle()
+
+if __name__ == '__main__':
+    main()
